@@ -11,10 +11,11 @@ The app scans recent X posts, extracts contract addresses and cashtags, enriches
 - DexScreener pair lookup
 - Low market cap filtering by mode: `safe`, `balanced`, `degen`
 - Major symbol exclusion for `BTC`, `ETH`, `SOL`, `USDT`, `USDC`, `BNB`, `DOGE`, `SHIB`, and `PEPE`
+- Previously pumped token exclusion based on historical `max_seen_cap`
 - Risk-adjusted `early_gem_score` with a final score cap
 - Separate `risk_level`: `Low`, `Medium`, `High`, `Extreme`
-- SQLite scan history
-- Tabs for `Candidate Ranking`, `High Risk Alerts`, and `Debug`
+- SQLite scan history and per-token registry
+- Tabs for `Candidate Ranking`, `High Risk Alerts`, `Excluded`, and `Debug`
 - Ranking table, history charts, and CSV export
 
 ## Setup
@@ -34,6 +35,31 @@ Run the app:
 ```bash
 streamlit run app.py
 ```
+
+## Previously Pumped Filter
+
+The app stores per-token historical highs in `token_registry`, keyed by `chain + token_address`.
+
+Registry fields include:
+
+- `chain`
+- `token_address`
+- `symbol`
+- `name`
+- `first_seen_at`
+- `last_seen_at`
+- `max_seen_cap`
+- `max_seen_liquidity`
+- `max_seen_volume_24h`
+
+On every scan, DexScreener pairs are written to the registry before low-cap filtering. `max_seen_cap` uses `market_cap` when available, otherwise `fdv`.
+
+The UI includes:
+
+- `Exclude previously pumped tokens`, default ON
+- `Previously pumped threshold`, default `2,000,000`
+
+When enabled, rows with `max_seen_cap >= threshold` are removed from `Candidate Ranking` and marked with `previously_pumped_max_seen_cap` in `exclusion_reason`. They appear in the `Excluded` tab instead.
 
 ## Scoring
 
@@ -82,6 +108,10 @@ Key exported columns include:
 - `name`
 - `chain`
 - `cap`
+- `current_cap`
+- `max_seen_cap`
+- `first_seen_at`
+- `last_seen_at`
 - `fdv`
 - `liquidity_usd`
 - `volume_24h`
