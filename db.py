@@ -102,6 +102,9 @@ def init_db(db_path: str = DB_PATH) -> None:
             volume_liquidity_ratio REAL,
             flag_count INTEGER,
             exclusion_reason TEXT,
+            current_cap_filter_pass INTEGER,
+            history_saved INTEGER,
+            near_previously_pumped INTEGER,
             score_breakdown TEXT
         )
         """
@@ -127,6 +130,9 @@ def init_db(db_path: str = DB_PATH) -> None:
     _ensure_column(c, "scans", "volume_liquidity_ratio", "REAL")
     _ensure_column(c, "scans", "flag_count", "INTEGER")
     _ensure_column(c, "scans", "exclusion_reason", "TEXT")
+    _ensure_column(c, "scans", "current_cap_filter_pass", "INTEGER")
+    _ensure_column(c, "scans", "history_saved", "INTEGER")
+    _ensure_column(c, "scans", "near_previously_pumped", "INTEGER")
     _ensure_column(c, "scans", "score_breakdown", "TEXT")
     _backfill_token_registry(c)
     c.commit()
