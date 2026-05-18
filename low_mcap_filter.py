@@ -2,7 +2,7 @@ import re
 from typing import Dict, List
 
 
-MAJOR_SYMBOLS = {
+EXCLUDED_SYMBOLS = {
     "BTC",
     "WBTC",
     "ETH",
@@ -17,6 +17,9 @@ MAJOR_SYMBOLS = {
     "DAI",
     "FDUSD",
     "TUSD",
+    "DOGE",
+    "SHIB",
+    "PEPE",
 }
 
 
@@ -24,8 +27,15 @@ def _normalize_symbol(symbol: str) -> str:
     return re.sub(r"[^A-Z0-9]", "", (symbol or "").upper())
 
 
+def exclusion_reason(row: Dict) -> str:
+    symbol = _normalize_symbol(str(row.get("symbol") or ""))
+    if symbol in EXCLUDED_SYMBOLS:
+        return f"excluded_major_symbol:{symbol}"
+    return ""
+
+
 def is_major_symbol(symbol: str) -> bool:
-    return _normalize_symbol(symbol) in MAJOR_SYMBOLS
+    return _normalize_symbol(symbol) in EXCLUDED_SYMBOLS
 
 
 def calc_cap(row: Dict) -> float:
@@ -35,7 +45,7 @@ def calc_cap(row: Dict) -> float:
 
 
 def passes_low_mcap(row: Dict, mode: str = "balanced") -> bool:
-    if is_major_symbol(str(row.get("symbol") or "")):
+    if exclusion_reason(row):
         return False
 
     cap = calc_cap(row)
@@ -64,6 +74,7 @@ def filter_candidates(rows: List[Dict], mode: str = "balanced") -> List[Dict]:
             seen_pairs.add(pair_address)
 
         r["cap"] = calc_cap(r)
+        r["exclusion_reason"] = exclusion_reason(r)
         if passes_low_mcap(r, mode=mode):
             out.append(r)
     return out
