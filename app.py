@@ -7,7 +7,7 @@ import streamlit as st
 from db import init_db, insert_scan, read_history, read_latest_rankings, update_token_registry_many
 from dexscreener_lookup import search_pairs
 from early_score import compute_score_details
-from low_mcap_filter import exclusion_reason, filter_candidates
+from low_mcap_filter import CANDIDATE_CURRENT_CAP_LIMIT, current_cap_filter_pass, exclusion_reason, filter_candidates
 from x_monitor import extract_candidates, fetch_recent_tweets, term_signals
 
 st.set_page_config(page_title="Low Mcap Meme Scanner", layout="wide")
@@ -25,6 +25,12 @@ previously_pumped_threshold = st.number_input(
     value=2_000_000,
     step=100_000,
 )
+buffer_threshold = st.number_input(
+    "Buffer threshold",
+    min_value=0,
+    value=1_800_000,
+    step=100_000,
+)
 
 EXPORT_COLUMNS = [
     "symbol",
@@ -33,6 +39,9 @@ EXPORT_COLUMNS = [
     "cap",
     "current_cap",
     "max_seen_cap",
+    "current_cap_filter_pass",
+    "history_saved",
+    "near_previously_pumped",
     "first_seen_at",
     "last_seen_at",
     "fdv",
@@ -58,6 +67,7 @@ RANKING_COLUMNS = [
     "chain",
     "current_cap",
     "max_seen_cap",
+    "near_previously_pumped",
     "liquidity_usd",
     "volume_24h",
     "volume_liquidity_ratio",
@@ -91,11 +101,11 @@ def run_scan(selected_mode: str, tweet_size: int) -> int:
             all_pairs.append(row)
 
     now = datetime.now(timezone.utc).isoformat()
-    update_token_registry_many(all_pairs, now)
-    filtered = filter_candidates(all_pairs, mode=selected_mode)
+    history_rows = filter_candidates(all_pairs, mode=selected_mode)
+    update_token_registry_many(history_rows, now)
 
     inserted = 0
-    for row in filtered:
+    for row in history_rows:
         x_signals = term_signals(tweets, row.get("source_term", ""))
         details = compute_score_details({**row, **x_signals})
         payload = {
@@ -111,6 +121,9 @@ def run_scan(selected_mode: str, tweet_size: int) -> int:
             "volume_liquidity_ratio": details["volume_liquidity_ratio"],
             "flag_count": details["flag_count"],
             "exclusion_reason": row.get("exclusion_reason", ""),
+            "current_cap_filter_pass": int(current_cap_filter_pass(row)),
+            "history_saved": 1,
+            "near_previously_pumped": 0,
             "score_breakdown": details["score_breakdown"],
         }
         insert_scan(payload)
@@ -131,7 +144,12 @@ def _append_exclusion_reason(existing: str, reason: str) -> str:
     return ",".join(parts)
 
 
-def prepare_rankings(df: pd.DataFrame, exclude_pumped: bool = False, pumped_threshold: float = 2_000_000) -> pd.DataFrame:
+def prepare_rankings(
+    df: pd.DataFrame,
+    exclude_pumped: bool = False,
+    pumped_threshold: float = 2_000_000,
+    near_threshold: float = 1_800_000,
+) -> pd.DataFrame:
     if df.empty:
         return df
 
@@ -146,6 +164,9 @@ def prepare_rankings(df: pd.DataFrame, exclude_pumped: bool = False, pumped_thre
         "max_seen_cap",
         "max_seen_liquidity",
         "max_seen_volume_24h",
+        "current_cap_filter_pass",
+        "history_saved",
+        "near_previously_pumped",
     ]:
         _ensure_numeric(df, column)
     df.loc[df["current_cap"] <= 0, "current_cap"] = df.loc[df["current_cap"] <= 0, "cap"]
@@ -169,6 +190,13 @@ def prepare_rankings(df: pd.DataFrame, exclude_pumped: bool = False, pumped_thre
     df["exclusion_reason"] = df.apply(
         lambda row: row["exclusion_reason"] or exclusion_reason(row.to_dict()),
         axis=1,
+    )
+    df["current_cap_filter_pass"] = df["current_cap"].apply(lambda cap: int(0 < cap < CANDIDATE_CURRENT_CAP_LIMIT))
+    df["history_saved"] = 1
+    df["near_previously_pumped"] = df["max_seen_cap"].apply(lambda cap: int(cap >= float(near_threshold)))
+    current_cap_failed = df["current_cap_filter_pass"] == 0
+    df.loc[current_cap_failed, "exclusion_reason"] = df.loc[current_cap_failed, "exclusion_reason"].apply(
+        lambda reason: _append_exclusion_reason(reason, "current_cap_filter_failed")
     )
     if exclude_pumped:
         pumped = df["max_seen_cap"] >= float(pumped_threshold)
@@ -195,6 +223,7 @@ ranking = prepare_rankings(
     read_latest_rankings(limit=1000),
     exclude_pumped=exclude_previously_pumped,
     pumped_threshold=previously_pumped_threshold,
+    near_threshold=buffer_threshold,
 )
 candidate_tab, alerts_tab, excluded_tab, debug_tab = st.tabs(["Candidate Ranking", "High Risk Alerts", "Excluded", "Debug"])
 
@@ -221,6 +250,7 @@ with candidate_tab:
                 read_history(selected),
                 exclude_pumped=exclude_previously_pumped,
                 pumped_threshold=previously_pumped_threshold,
+                near_threshold=buffer_threshold,
             )
             if not hist.empty:
                 hist["scanned_at"] = pd.to_datetime(hist["scanned_at"])
@@ -264,6 +294,17 @@ with debug_tab:
     if ranking.empty:
         st.info("No data yet.")
     else:
+        history_saved_count = int(ranking["history_saved"].sum())
+        current_cap_over_count = int((ranking["current_cap"] >= CANDIDATE_CURRENT_CAP_LIMIT).sum())
+        max_seen_over_count = int((ranking["max_seen_cap"] >= CANDIDATE_CURRENT_CAP_LIMIT).sum())
+        previously_pumped_excluded_count = int(
+            ranking["exclusion_reason"].str.contains("previously_pumped_max_seen_cap", na=False).sum()
+        )
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("History saved", history_saved_count)
+        c2.metric("Current cap >= 2M", current_cap_over_count)
+        c3.metric("Max seen cap >= 2M", max_seen_over_count)
+        c4.metric("Previously pumped excluded", previously_pumped_excluded_count)
         debug_columns = EXPORT_COLUMNS + ["source_term", "tweet_count", "scanned_at", "pair_address", "token_address"]
         st.dataframe(_select_columns(ranking, debug_columns), use_container_width=True)
 
