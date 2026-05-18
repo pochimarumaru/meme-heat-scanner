@@ -142,7 +142,7 @@ def prepare_rankings(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def _select_columns(df: pd.DataFrame, columns: list[str]) -> pd.DataFrame:
+def _select_columns(df: pd.DataFrame, columns) -> pd.DataFrame:
     for column in columns:
         if column not in df.columns:
             df[column] = ""
@@ -179,6 +179,7 @@ with candidate_tab:
             hist = prepare_rankings(read_history(selected))
             if not hist.empty:
                 hist["scanned_at"] = pd.to_datetime(hist["scanned_at"])
+                hist = hist.sort_values("scanned_at")
                 fig1 = px.line(hist, x="scanned_at", y=["volume_24h", "liquidity_usd", "x_mentions"], markers=True)
                 st.plotly_chart(fig1, use_container_width=True)
                 fig2 = px.line(hist, x="scanned_at", y=["early_gem_score"], markers=True)
