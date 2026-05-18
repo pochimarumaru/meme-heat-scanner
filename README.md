@@ -2,16 +2,18 @@
 
 Low mcap meme coin candidate scanner built with Streamlit.
 
-The app scans recent X posts, extracts contract addresses and cashtags, enriches candidates with DexScreener data, filters out unsuitable pairs, and ranks remaining candidates with a risk-adjusted `early_gem_score`.
+The app scans recent X posts, extracts contract addresses and cashtags, enriches candidates with DexScreener data, saves token history up to a wider cap range, and ranks only current low-cap candidates with a risk-adjusted `early_gem_score`.
 
 ## Features
 
 - X Recent Search based candidate discovery
 - EVM address, Solana address, and cashtag extraction
 - DexScreener pair lookup
-- Low market cap filtering by mode: `safe`, `balanced`, `degen`
-- Major symbol exclusion for `BTC`, `ETH`, `SOL`, `USDT`, `USDC`, `BNB`, `DOGE`, `SHIB`, and `PEPE`
+- Scan history saved for tokens up to `10,000,000` cap
+- Candidate Ranking limited to current cap below `2,000,000`
+- Major symbol exclusion for `BTC`, `ETH`, `SOL`, `USDT`, `USDC`, `BNB`, `DOGE`, `SHIB`, `PEPE`, `XRP`, `ADA`, `AVAX`, `LINK`, `MATIC`, `DOT`, `TRX`, and `TON`
 - Previously pumped token exclusion based on historical `max_seen_cap`
+- Near-pumped flag based on a buffer threshold
 - Risk-adjusted `early_gem_score` with a final score cap
 - Separate `risk_level`: `Low`, `Medium`, `High`, `Extreme`
 - SQLite scan history and per-token registry
@@ -36,6 +38,23 @@ Run the app:
 streamlit run app.py
 ```
 
+## History vs Ranking
+
+The scanner separates history storage from candidate display.
+
+History storage:
+
+- Saves rows with `cap <= 10,000,000`
+- `cap` means `market_cap` when available, otherwise `fdv`
+- Saves High and Extreme risk rows too
+- Updates `token_registry` for each saved token
+
+Candidate Ranking display:
+
+- Requires `current_cap < 2,000,000`
+- Excludes rows with `max_seen_cap >= Previously pumped threshold`
+- Excludes major-symbol noise with `major_symbol_noise`
+
 ## Previously Pumped Filter
 
 The app stores per-token historical highs in `token_registry`, keyed by `chain + token_address`.
@@ -52,14 +71,13 @@ Registry fields include:
 - `max_seen_liquidity`
 - `max_seen_volume_24h`
 
-On every scan, DexScreener pairs are written to the registry before low-cap filtering. `max_seen_cap` uses `market_cap` when available, otherwise `fdv`.
-
 The UI includes:
 
 - `Exclude previously pumped tokens`, default ON
 - `Previously pumped threshold`, default `2,000,000`
+- `Buffer threshold`, default `1,800,000`
 
-When enabled, rows with `max_seen_cap >= threshold` are removed from `Candidate Ranking` and marked with `previously_pumped_max_seen_cap` in `exclusion_reason`. They appear in the `Excluded` tab instead.
+When enabled, rows with `max_seen_cap >= threshold` are removed from `Candidate Ranking` and marked with `previously_pumped_max_seen_cap` in `exclusion_reason`. Rows with `max_seen_cap >= buffer threshold` get `near_previously_pumped = 1`.
 
 ## Scoring
 
@@ -110,6 +128,9 @@ Key exported columns include:
 - `cap`
 - `current_cap`
 - `max_seen_cap`
+- `current_cap_filter_pass`
+- `history_saved`
+- `near_previously_pumped`
 - `first_seen_at`
 - `last_seen_at`
 - `fdv`
@@ -127,6 +148,15 @@ Key exported columns include:
 - `early_gem_score`
 - `score_breakdown`
 - `url`
+
+## Debug Metrics
+
+The `Debug` tab shows:
+
+- history saved row count
+- current cap `>= 2M` count
+- max seen cap `>= 2M` count
+- previously pumped excluded count
 
 ## Notes
 
