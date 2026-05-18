@@ -85,6 +85,7 @@ def extract_candidates(tweets: List[Dict]) -> Dict[str, List[str]]:
 def aggregate_x_signals(tweets: List[Dict]) -> Dict[str, float]:
     unique = {t.get("tweet_id") for t in tweets if t.get("tweet_id")}
     unique_authors = {t.get("author_id") or t.get("username") for t in tweets if t.get("author_id") or t.get("username")}
+    unique_author_count = len(unique_authors) if unique_authors else len(unique)
     engagement = sum(
         t.get("like_count", 0) + t.get("retweet_count", 0) + t.get("reply_count", 0) + t.get("quote_count", 0)
         for t in tweets
@@ -97,7 +98,7 @@ def aggregate_x_signals(tweets: List[Dict]) -> Dict[str, float]:
         "x_mentions": float(len(tweets)),
         "x_engagement": float(engagement),
         "unique_tweets": float(len(unique)),
-        "unique_authors": float(len(unique_authors)),
+        "unique_authors": float(unique_author_count),
         "ca_mentions": float(ca_mentions),
     }
 
