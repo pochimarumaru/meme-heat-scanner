@@ -3,10 +3,18 @@ from typing import Dict, List
 
 
 EXCLUDED_SYMBOLS = {
+    "ADA",
+    "AVAX",
     "BTC",
     "WBTC",
+    "DOT",
     "ETH",
     "WETH",
+    "LINK",
+    "MATIC",
+    "TON",
+    "TRX",
+    "XRP",
     "SOL",
     "WSOL",
     "BNB",
@@ -22,6 +30,9 @@ EXCLUDED_SYMBOLS = {
     "PEPE",
 }
 
+HISTORY_CAP_LIMIT = 10_000_000
+CANDIDATE_CURRENT_CAP_LIMIT = 2_000_000
+
 
 def _normalize_symbol(symbol: str) -> str:
     return re.sub(r"[^A-Z0-9]", "", (symbol or "").upper())
@@ -30,7 +41,7 @@ def _normalize_symbol(symbol: str) -> str:
 def exclusion_reason(row: Dict) -> str:
     symbol = _normalize_symbol(str(row.get("symbol") or ""))
     if symbol in EXCLUDED_SYMBOLS:
-        return f"excluded_major_symbol:{symbol}"
+        return "major_symbol_noise"
     return ""
 
 
@@ -45,21 +56,12 @@ def calc_cap(row: Dict) -> float:
 
 
 def passes_low_mcap(row: Dict, mode: str = "balanced") -> bool:
-    if exclusion_reason(row):
-        return False
-
     cap = calc_cap(row)
-    liq = float(row.get("liquidity_usd") or 0)
-    vol = float(row.get("volume_24h") or 0)
-    txns = float(row.get("txns_24h") or 0)
+    return 0 < cap <= HISTORY_CAP_LIMIT
 
-    cfg = {
-        "safe": {"cap": 3_000_000, "liq": 25_000, "vol": 20_000, "txns": 120},
-        "balanced": {"cap": 5_000_000, "liq": 10_000, "vol": 5_000, "txns": 50},
-        "degen": {"cap": 8_000_000, "liq": 5_000, "vol": 2_500, "txns": 20},
-    }[mode]
 
-    return 0 < cap <= cfg["cap"] and liq >= cfg["liq"] and vol >= cfg["vol"] and txns >= cfg["txns"]
+def current_cap_filter_pass(row: Dict) -> bool:
+    return 0 < calc_cap(row) < CANDIDATE_CURRENT_CAP_LIMIT
 
 
 def filter_candidates(rows: List[Dict], mode: str = "balanced") -> List[Dict]:
