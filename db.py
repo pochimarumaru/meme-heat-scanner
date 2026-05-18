@@ -52,12 +52,20 @@ def init_db(db_path: str = DB_PATH) -> None:
             ca_mentions REAL,
             early_gem_score REAL,
             risk_flags TEXT,
-            risk_level TEXT
+            risk_level TEXT,
+            volume_liquidity_ratio REAL,
+            flag_count INTEGER,
+            exclusion_reason TEXT,
+            score_breakdown TEXT
         )
         """
     )
     _ensure_column(c, "scans", "unique_authors", "REAL")
     _ensure_column(c, "scans", "risk_level", "TEXT")
+    _ensure_column(c, "scans", "volume_liquidity_ratio", "REAL")
+    _ensure_column(c, "scans", "flag_count", "INTEGER")
+    _ensure_column(c, "scans", "exclusion_reason", "TEXT")
+    _ensure_column(c, "scans", "score_breakdown", "TEXT")
     c.commit()
     c.close()
 
@@ -83,7 +91,7 @@ def read_latest_rankings(limit: int = 100, db_path: str = DB_PATH) -> pd.DataFra
           WHERE symbol IS NOT NULL AND symbol != ''
         )
         SELECT * FROM latest WHERE rn=1
-        ORDER BY early_gem_score DESC
+        ORDER BY scanned_at DESC, id DESC
         LIMIT ?
         """,
         c,
