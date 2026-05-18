@@ -4,7 +4,7 @@ import pandas as pd
 import plotly.express as px
 import streamlit as st
 
-from db import init_db, insert_scan, read_history, read_latest_rankings
+from db import init_db, insert_scan, read_history, read_latest_rankings, update_token_registry_many
 from dexscreener_lookup import search_pairs
 from early_score import compute_score_details
 from low_mcap_filter import exclusion_reason, filter_candidates
@@ -18,12 +18,23 @@ init_db()
 
 mode = st.selectbox("Mode", ["safe", "balanced", "degen"], index=1)
 max_tweets = st.slider("Tweets to scan", min_value=20, max_value=100, value=50, step=10)
+exclude_previously_pumped = st.checkbox("Exclude previously pumped tokens", value=True)
+previously_pumped_threshold = st.number_input(
+    "Previously pumped threshold",
+    min_value=0,
+    value=2_000_000,
+    step=100_000,
+)
 
 EXPORT_COLUMNS = [
     "symbol",
     "name",
     "chain",
     "cap",
+    "current_cap",
+    "max_seen_cap",
+    "first_seen_at",
+    "last_seen_at",
     "fdv",
     "liquidity_usd",
     "volume_24h",
@@ -45,7 +56,8 @@ RANKING_COLUMNS = [
     "symbol",
     "name",
     "chain",
-    "cap",
+    "current_cap",
+    "max_seen_cap",
     "liquidity_usd",
     "volume_24h",
     "volume_liquidity_ratio",
@@ -78,8 +90,9 @@ def run_scan(selected_mode: str, tweet_size: int) -> int:
             row["source_term"] = term
             all_pairs.append(row)
 
-    filtered = filter_candidates(all_pairs, mode=selected_mode)
     now = datetime.now(timezone.utc).isoformat()
+    update_token_registry_many(all_pairs, now)
+    filtered = filter_candidates(all_pairs, mode=selected_mode)
 
     inserted = 0
     for row in filtered:
@@ -111,17 +124,36 @@ def _ensure_numeric(df: pd.DataFrame, column: str) -> None:
     df[column] = pd.to_numeric(df[column], errors="coerce").fillna(0.0)
 
 
-def prepare_rankings(df: pd.DataFrame) -> pd.DataFrame:
+def _append_exclusion_reason(existing: str, reason: str) -> str:
+    parts = [part for part in str(existing or "").split(",") if part]
+    if reason and reason not in parts:
+        parts.append(reason)
+    return ",".join(parts)
+
+
+def prepare_rankings(df: pd.DataFrame, exclude_pumped: bool = False, pumped_threshold: float = 2_000_000) -> pd.DataFrame:
     if df.empty:
         return df
 
     df = df.copy()
-    for column in ["x_mentions", "unique_tweets", "unique_authors", "x_engagement"]:
+    for column in [
+        "x_mentions",
+        "unique_tweets",
+        "unique_authors",
+        "x_engagement",
+        "cap",
+        "current_cap",
+        "max_seen_cap",
+        "max_seen_liquidity",
+        "max_seen_volume_24h",
+    ]:
         _ensure_numeric(df, column)
+    df.loc[df["current_cap"] <= 0, "current_cap"] = df.loc[df["current_cap"] <= 0, "cap"]
+    df.loc[df["max_seen_cap"] <= 0, "max_seen_cap"] = df.loc[df["max_seen_cap"] <= 0, "current_cap"]
     df.loc[df["unique_authors"] <= 0, "unique_authors"] = df.loc[df["unique_authors"] <= 0, "unique_tweets"]
     df.loc[df["unique_authors"] <= 0, "unique_authors"] = df.loc[df["unique_authors"] <= 0, "x_mentions"]
 
-    for column in ["risk_flags", "risk_level", "exclusion_reason", "score_breakdown"]:
+    for column in ["risk_flags", "risk_level", "exclusion_reason", "score_breakdown", "first_seen_at", "last_seen_at"]:
         if column not in df.columns:
             df[column] = ""
         df[column] = df[column].fillna("").astype(str)
@@ -138,6 +170,11 @@ def prepare_rankings(df: pd.DataFrame) -> pd.DataFrame:
         lambda row: row["exclusion_reason"] or exclusion_reason(row.to_dict()),
         axis=1,
     )
+    if exclude_pumped:
+        pumped = df["max_seen_cap"] >= float(pumped_threshold)
+        df.loc[pumped, "exclusion_reason"] = df.loc[pumped, "exclusion_reason"].apply(
+            lambda reason: _append_exclusion_reason(reason, "previously_pumped_max_seen_cap")
+        )
     df = df.sort_values(["early_gem_score", "x_mentions", "unique_authors"], ascending=[False, False, False])
     return df
 
@@ -154,8 +191,12 @@ if st.button("Scan X now", type="primary"):
         n = run_scan(mode, max_tweets)
     st.success(f"Scan done. Inserted {n} candidates.")
 
-ranking = prepare_rankings(read_latest_rankings(limit=1000))
-candidate_tab, alerts_tab, debug_tab = st.tabs(["Candidate Ranking", "High Risk Alerts", "Debug"])
+ranking = prepare_rankings(
+    read_latest_rankings(limit=1000),
+    exclude_pumped=exclude_previously_pumped,
+    pumped_threshold=previously_pumped_threshold,
+)
+candidate_tab, alerts_tab, excluded_tab, debug_tab = st.tabs(["Candidate Ranking", "High Risk Alerts", "Excluded", "Debug"])
 
 with candidate_tab:
     st.subheader("Candidate Ranking")
@@ -176,7 +217,11 @@ with candidate_tab:
         symbols = candidates["symbol"].dropna().unique().tolist()
         if symbols:
             selected = st.selectbox("Chart symbol", symbols, index=0)
-            hist = prepare_rankings(read_history(selected))
+            hist = prepare_rankings(
+                read_history(selected),
+                exclude_pumped=exclude_previously_pumped,
+                pumped_threshold=previously_pumped_threshold,
+            )
             if not hist.empty:
                 hist["scanned_at"] = pd.to_datetime(hist["scanned_at"])
                 hist = hist.sort_values("scanned_at")
@@ -197,6 +242,22 @@ with alerts_tab:
         alerts["_risk_order"] = alerts["risk_level"].map({"Extreme": 0, "High": 1, "Medium": 2, "Low": 3}).fillna(9)
         alerts = alerts.sort_values(["_risk_order", "flag_count", "volume_liquidity_ratio"], ascending=[True, False, False])
         st.dataframe(_select_columns(alerts.drop(columns=["_risk_order"], errors="ignore"), RANKING_COLUMNS), use_container_width=True)
+
+with excluded_tab:
+    st.subheader("Excluded")
+    if ranking.empty:
+        st.info("No data yet.")
+    else:
+        excluded = ranking[ranking["exclusion_reason"].str.contains("previously_pumped_max_seen_cap", na=False)].copy()
+        excluded = excluded.sort_values(["max_seen_cap", "current_cap"], ascending=[False, False])
+        excluded_columns = EXPORT_COLUMNS + ["max_seen_liquidity", "max_seen_volume_24h", "source_term"]
+        st.dataframe(_select_columns(excluded, excluded_columns), use_container_width=True)
+        st.download_button(
+            "Export Excluded CSV",
+            data=_select_columns(excluded, excluded_columns).to_csv(index=False).encode("utf-8-sig"),
+            file_name="meme_heat_excluded.csv",
+            mime="text/csv",
+        )
 
 with debug_tab:
     st.subheader("Debug")
